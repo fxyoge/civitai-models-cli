@@ -121,13 +121,14 @@ def select_version(
 
 
 def check_for_upgrade(
-    versions: dict, model_path: str, selected_version: Dict[str, Any]
+    versions: dict, model_path: str, selected_version: Dict[str, Any], json_mode: bool = False
 ) -> bool:
-    current_version = os.path.basename(model_path)
+    if json_mode:
+        return False
     latest_version = versions[0].get("file")
-    if latest_version != selected_version["file"] and latest_version != current_version:
+    if latest_version != selected_version["file"]:
         feedback_message(
-            f"A newer version '{selected_version['file']}' is available.", "info"
+            f"A newer version '{latest_version}' is available.", "info"
         )
         return typer.confirm("Do you want to upgrade?", default=True)
     return False
@@ -228,7 +229,7 @@ def download_model(
     )
 
     if os.path.exists(model_path):
-        if not check_for_upgrade(versions, model_path, selected_version):
+        if not check_for_upgrade(versions, model_path, selected_version, json_mode=json_mode):
             if not json_mode:
                 feedback_message(
                     f"Model {model_name} already exists at {model_path}. Skipping download.",
