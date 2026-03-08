@@ -31,7 +31,8 @@ dependencies = [
    "groq",
    "tenacity",
    "asyncio",
-   "civitai-py"
+   "civitai-py",
+   "pyyaml>=6.0.3",
 ]
 
 [tool.hatch.version]

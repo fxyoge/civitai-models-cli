@@ -319,6 +319,7 @@ def download_model_command(
         False, "--select", "-s", help="Enable version selection for each model"
     ),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
+    no_metadata: bool = typer.Option(False, "--no-metadata", help="Skip writing metadata YML alongside model file"),
 ):
     """
     Download up to 5 specific model variants by ID.
@@ -347,6 +348,7 @@ def download_model_command(
         TYPES=TYPES,
         FILE_TYPES=FILE_TYPES,
         json_mode=json_output,
+        no_metadata=no_metadata,
     )
 
 

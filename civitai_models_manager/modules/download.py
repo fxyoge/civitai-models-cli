@@ -6,6 +6,9 @@ import shutil
 import tempfile
 import typer
 import time
+import yaml
+import html2text as html2text_module
+from pathlib import Path
 from typing import Any, List, Dict, Optional, Tuple
 from tqdm import tqdm
 from rich.console import Console
@@ -19,6 +22,67 @@ console = Console()
 MAX_RETRIES = 3
 TIMEOUT = 30  # seconds
 MAX_CONCURRENT_DOWNLOADS = 10
+
+_h2t = html2text_module.HTML2Text()
+_h2t.ignore_links = True
+
+
+class _LiteralDumper(yaml.Dumper):
+    pass
+
+
+def _literal_str_representer(dumper, data):
+    if "\n" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+_LiteralDumper.add_representer(str, _literal_str_representer)
+
+
+def write_metadata_yml(
+    model_path: str, model_id: int, model_details: Dict[str, Any]
+) -> Optional[str]:
+    """Write a {stem}.yml alongside the model file. Skips if file already exists."""
+    yml_path = Path(model_path).with_suffix(".yml")
+    if yml_path.exists():
+        return str(yml_path)
+
+    description_html = model_details.get("description", "") or ""
+    if description_html:
+        raw = _h2t.handle(description_html)
+        description = "\n".join(line.rstrip() for line in raw.splitlines()).strip()
+    else:
+        description = ""
+
+    versions = model_details.get("versions", [])
+    base_model = versions[0].get("base_model", "") if versions else model_details.get("base_model", "")
+
+    trained_words = model_details.get("trainedWords", "None")
+    if isinstance(trained_words, list):
+        trigger_words = trained_words
+    elif trained_words and trained_words != "None":
+        trigger_words = [trained_words]
+    else:
+        trigger_words = []
+
+    metadata: Dict[str, Any] = {
+        "name": model_details.get("name", ""),
+        "base_model": base_model,
+        "source_url": f"https://civitai.com/models/{model_id}",
+        "tags": model_details.get("tags", []),
+    }
+    if description:
+        metadata["description"] = description
+    if trigger_words:
+        metadata["trigger_words"] = trigger_words
+
+    try:
+        with open(yml_path, "w", encoding="utf-8") as f:
+            yaml.dump(metadata, f, Dumper=_LiteralDumper, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return str(yml_path)
+    except Exception:
+        return None
 
 
 def select_version(
@@ -206,17 +270,17 @@ def download_file(url: str, path: str, desc: str, json_mode: bool = False) -> Op
 
 
 def download_multiple_models(
-    identifiers: List[str], select: bool, json_mode: bool = False, **kwargs
+    identifiers: List[str], select: bool, json_mode: bool = False, no_metadata: bool = False, **kwargs
 ) -> List[Tuple[str, Optional[str], Optional[str]]]:
     results = []
     for identifier in identifiers[:MAX_CONCURRENT_DOWNLOADS]:
-        result = download_single_model(identifier, select, json_mode=json_mode, **kwargs)
+        result = download_single_model(identifier, select, json_mode=json_mode, no_metadata=no_metadata, **kwargs)
         results.append(result)
     return results
 
 
 def download_single_model(
-    identifier: str, select: bool, json_mode: bool = False, **kwargs
+    identifier: str, select: bool, json_mode: bool = False, no_metadata: bool = False, **kwargs
 ) -> Tuple[str, Optional[str], Optional[str]]:
     try:
         model_id = int(identifier)
@@ -244,46 +308,50 @@ def download_single_model(
                 feedback_message(f"Failed to download the model {identifier}: {e}", "error")
                 return identifier, None, str(e)
             if model_path:
+                metadata_path = None
+                if not no_metadata:
+                    metadata_path = write_metadata_yml(model_path, model_id, model_details)
                 if not json_mode:
                     feedback_message(
                         f"Model {identifier} downloaded successfully at: {model_path}",
                         "info",
                     )
-                return identifier, model_path, None
+                return identifier, model_path, None, metadata_path
             else:
                 if model_path is not None and not json_mode:
                     feedback_message(
                         f"Failed to download the model {identifier}.", "error"
                     )
-                return identifier, None, f"Failed to download model {identifier}"
+                return identifier, None, f"Failed to download model {identifier}", None
         else:
             if not json_mode:
                 feedback_message(f"No model found with ID: {identifier}.", "error")
-            return identifier, None, f"No model found with ID: {identifier}"
+            return identifier, None, f"No model found with ID: {identifier}", None
     except ValueError:
         if not json_mode:
             feedback_message(
                 f"Invalid model ID: {identifier}. Please enter a valid number.", "error"
             )
-        return identifier, None, f"Invalid model ID: {identifier}"
+        return identifier, None, f"Invalid model ID: {identifier}", None
     except Exception as e:
         if not json_mode:
             feedback_message(f"Error processing model {identifier}: {e}", "error")
-        return identifier, None, str(e)
+        return identifier, None, str(e), None
 
 
 def download_model_cli(identifiers: List[str], select: bool = False, **kwargs) -> None:
     json_mode = kwargs.pop("json_mode", False)
+    no_metadata = kwargs.pop("no_metadata", False)
     if not identifiers:
         if json_mode:
             print(json.dumps({"status": "error", "message": "No model identifiers provided."}))
         else:
             feedback_message("No model identifiers provided.", "error")
         return
-    results = download_multiple_models(identifiers, select, json_mode=json_mode, **kwargs)
+    results = download_multiple_models(identifiers, select, json_mode=json_mode, no_metadata=no_metadata, **kwargs)
     if json_mode:
         output = []
-        for identifier, path, error in results:
+        for identifier, path, error, metadata_path in results:
             if path:
                 output.append({
                     "status": "ok",
@@ -291,7 +359,7 @@ def download_model_cli(identifiers: List[str], select: bool = False, **kwargs) -
                     "path": path,
                     "size_bytes": os.path.getsize(path),
                     "model_name": os.path.basename(path),
-                    "metadata_path": None,
+                    "metadata_path": metadata_path,
                 })
             else:
                 output.append({
