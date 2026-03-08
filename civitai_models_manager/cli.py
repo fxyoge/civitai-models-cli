@@ -1,6 +1,7 @@
 # /// script
 # requires-python = ">=3.9"
 # dependencies = [
+#   "json",
 #   "typer",
 #   "rich",
 #   "httpx",
@@ -17,6 +18,7 @@
 # ]
 # ///
 
+import json
 import typer
 
 from typing import List, Optional
@@ -325,11 +327,11 @@ def download_model_command(
     :return: None
     """
     if len(identifiers) > 5:
-        if not json_output:
-            typer.echo(
-                "You can download a maximum of 5 models at a time. Only the first 5 will be processed."
-            )
-        identifiers = identifiers[:5]
+        if json_output:
+            typer.echo(json.dumps({"error": "You can download a maximum of 5 models at a time."}))
+        else:
+            feedback_message("You can download a maximum of 5 models at a time.", "error")
+        raise typer.Exit(code=1)
 
     if not json_output:
         typer.echo(f"Preparing to download {len(identifiers)} model(s)...")
