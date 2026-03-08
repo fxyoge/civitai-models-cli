@@ -142,6 +142,7 @@ def download_model(
     model_details: Dict[str, Any],
     select: bool = False,
     json_mode: bool = False,
+    version_id: Optional[int] = None,
 ) -> Optional[str]:
     model_name = model_details.get("name", f"Model_{model_id}")
     model_type = model_details.get("type", "unknown")
@@ -153,18 +154,55 @@ def download_model(
             feedback_message(f"No versions available for model {model_name}.", "warning")
         return None
 
-    if not select and not model_details.get("parent_id"):
-        selected_version = versions[0]
-    elif not select and model_details.get("parent_id"):
+    if model_details.get("parent_id"):
+        # Already a specific version (looked up via version ID)
         selected_version = {
             "id": model_id,
             "name": model_details.get("name", ""),
             "base_model": model_details.get("base_model", ""),
             "download_url": model_details.get("download_url", ""),
-            "images": model_details["images"][0].get("url", ""),
+            "images": model_details["images"][0].get("url", "") if model_details.get("images") else "",
             "file": model_meta.get("file", ""),
         }
-    else:
+    elif version_id is not None:
+        # model_id@version_id syntax: find the matching version
+        matched = next((v for v in versions if v["id"] == version_id), None)
+        if not matched:
+            if not json_mode:
+                feedback_message(
+                    f"Version {version_id} not found for model {model_name}. Available versions:",
+                    "error",
+                )
+                versions_table = create_table(
+                    "Available Versions",
+                    [("Version ID", "bright_yellow"), ("Version Name", "cyan"), ("Base Model", "blue")],
+                )
+                for v in versions:
+                    versions_table.add_row(str(v["id"]), v["name"], v["base_model"])
+                console.print(versions_table)
+            return None
+        selected_version = matched
+    elif len(versions) > 1 and not select:
+        # Multiple versions, no version pinned — require explicit selection
+        if not json_mode:
+            feedback_message(
+                f"Model {model_name} has {len(versions)} versions. Specify one with {model_id}@<version_id>:",
+                "error",
+            )
+            versions_table = create_table(
+                "Available Versions",
+                [("Version ID", "bright_yellow"), ("Version Name", "cyan"), ("Base Model", "blue")],
+            )
+            for v in versions:
+                versions_table.add_row(str(v["id"]), v["name"], v["base_model"])
+            console.print(versions_table)
+        else:
+            raise ValueError(
+                f"Model {model_name} has multiple versions. Use {model_id}@<version_id>. "
+                f"Available: {[{'id': v['id'], 'name': v['name']} for v in versions]}"
+            )
+        return None
+    elif select:
         if model_details.get("parent_id"):
             if not json_mode:
                 feedback_message(
@@ -173,6 +211,9 @@ def download_model(
                 )
             return None
         selected_version = select_version(model_name, versions)
+    else:
+        # Single version, no selection needed
+        selected_version = versions[0]
 
     if not selected_version:
         if not json_mode:
@@ -283,7 +324,13 @@ def download_single_model(
     identifier: str, select: bool, json_mode: bool = False, no_metadata: bool = False, **kwargs
 ) -> Tuple[str, Optional[str], Optional[str]]:
     try:
-        model_id = int(identifier)
+        version_id = None
+        if "@" in identifier:
+            model_part, version_part = identifier.split("@", 1)
+            model_id = int(model_part)
+            version_id = int(version_part)
+        else:
+            model_id = int(identifier)
         model_details = get_model_details(
             kwargs.get("CIVITAI_MODELS"),
             kwargs.get("CIVITAI_VERSIONS"),
@@ -301,12 +348,13 @@ def download_single_model(
                     model_details,
                     select,
                     json_mode=json_mode,
+                    version_id=version_id,
                 )
             except Exception as e:
                 if json_mode:
-                    return identifier, None, str(e)
+                    return identifier, None, str(e), None
                 feedback_message(f"Failed to download the model {identifier}: {e}", "error")
-                return identifier, None, str(e)
+                return identifier, None, str(e), None
             if model_path:
                 metadata_path = None
                 if not no_metadata:
