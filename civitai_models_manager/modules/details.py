@@ -1,4 +1,5 @@
 import httpx
+import json
 import subprocess
 from typing import Any, Dict, List, Tuple, Optional
 import html2text
@@ -65,8 +66,7 @@ def make_request(url: str) -> Optional[Dict]:
         else:
             response.raise_for_status()
         return response.json()
-    except httpx.RequestError as e:
-        feedback_message(f"Failed to get data from {url}: {e}", "error")
+    except (httpx.RequestError, httpx.HTTPStatusError):
         return None
 
 
@@ -357,14 +357,51 @@ def get_model_details_cli(
     images: bool = False,
     CIVITAI_MODELS: str = "",
     CIVITAI_VERSIONS: str = "",
+    json_mode: bool = False,
 ) -> None:
     """Get detailed information about a specific model by ID."""
     try:
         model_id = int(identifier)
         model_details = get_model_details(CIVITAI_MODELS, CIVITAI_VERSIONS, model_id)
         if model_details:
-            print_model_details(model_details, desc, images)
+            if json_mode:
+                nsfw_val = model_details.get("nsfw")
+                if hasattr(nsfw_val, "plain"):
+                    nsfw_str = nsfw_val.plain
+                else:
+                    nsfw_str = str(nsfw_val)
+                output = {
+                    "id": model_details.get("id"),
+                    "name": model_details.get("name"),
+                    "type": model_details.get("type"),
+                    "base_model": model_details.get("base_model", ""),
+                    "air": model_details.get("air", ""),
+                    "creator": model_details.get("creator", ""),
+                    "nsfw": nsfw_str,
+                    "tags": model_details.get("tags", []),
+                    "metadata": model_details.get("metadata", {}),
+                    "versions": [
+                        {
+                            "id": v.get("id"),
+                            "name": v.get("name"),
+                            "base_model": v.get("base_model"),
+                            "air": v.get("air", ""),
+                            "file": v.get("file", ""),
+                            "download_url": v.get("download_url", ""),
+                        }
+                        for v in model_details.get("versions", [])
+                    ],
+                }
+                print(json.dumps(output))
+            else:
+                print_model_details(model_details, desc, images)
         else:
-            feedback_message(f"No model found with ID: {identifier}", "error")
+            if json_mode:
+                print(json.dumps({"status": "error", "message": f"No model found with ID: {identifier}"}))
+            else:
+                feedback_message(f"No model found with ID: {identifier}", "error")
     except ValueError:
-        feedback_message("Invalid model ID. Please enter a valid number.", "error")
+        if json_mode:
+            print(json.dumps({"status": "error", "message": "Invalid model ID. Please enter a valid number."}))
+        else:
+            feedback_message("Invalid model ID. Please enter a valid number.", "error")

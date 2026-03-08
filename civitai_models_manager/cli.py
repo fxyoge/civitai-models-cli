@@ -147,6 +147,7 @@ def search_models_command(
     limit: int = typer.Option(20, help="Limit the number of results"),
     sort: str = typer.Option("Highest Rated", help="Sort order for results"),
     period: str = typer.Option("AllTime", help="Time period for results"),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ):
     search_cli_sync(
         query,
@@ -157,6 +158,7 @@ def search_models_command(
         period,
         CIVITAI_MODELS=CIVITAI_MODELS,
         TYPES=TYPES,
+        json_mode=json_output,
     )
 
 
@@ -287,6 +289,7 @@ def details_command(
     images: bool = typer.Option(
         False, "--images", "-i", help="The images of the model"
     ),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ):
     """
     Get detailed information about a specific model by ID.
@@ -301,6 +304,7 @@ def details_command(
         images,
         CIVITAI_MODELS=CIVITAI_MODELS,
         CIVITAI_VERSIONS=CIVITAI_VERSIONS,
+        json_mode=json_output,
     )
 
 
@@ -312,6 +316,7 @@ def download_model_command(
     select: bool = typer.Option(
         False, "--select", "-s", help="Enable version selection for each model"
     ),
+    json_output: bool = typer.Option(False, "--json", help="Output results as JSON"),
 ):
     """
     Download up to 5 specific model variants by ID.
@@ -320,12 +325,14 @@ def download_model_command(
     :return: None
     """
     if len(identifiers) > 5:
-        typer.echo(
-            "You can download a maximum of 5 models at a time. Only the first 5 will be processed."
-        )
+        if not json_output:
+            typer.echo(
+                "You can download a maximum of 5 models at a time. Only the first 5 will be processed."
+            )
         identifiers = identifiers[:5]
 
-    typer.echo(f"Preparing to download {len(identifiers)} model(s)...")
+    if not json_output:
+        typer.echo(f"Preparing to download {len(identifiers)} model(s)...")
 
     return download_model_cli(
         identifiers,
@@ -337,6 +344,7 @@ def download_model_command(
         CIVITAI_TOKEN=CIVITAI_TOKEN,
         TYPES=TYPES,
         FILE_TYPES=FILE_TYPES,
+        json_mode=json_output,
     )
 
 

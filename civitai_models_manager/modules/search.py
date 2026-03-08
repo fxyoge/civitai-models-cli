@@ -1,7 +1,9 @@
 import httpx
+import json
 import subprocess
 import questionary
 import asyncio
+from contextlib import contextmanager
 from enum import Enum
 from questionary import Style
 from typing import Any, Dict, List, Union, Optional
@@ -10,6 +12,11 @@ from rich.text import Text
 from .helpers import create_table, feedback_message
 from .utils import clean_text, format_file_size
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+
+
+@contextmanager
+def _null_context():
+    yield
 
 console = Console(soft_wrap=True)
 
@@ -161,6 +168,7 @@ async def search_cli(
     CIVITAI_MODELS=None,
     TYPES=None,
     download_function=None,
+    json_mode: bool = False,
 ) -> None:
     current_url = CIVITAI_MODELS
     has_previous = False
@@ -168,7 +176,7 @@ async def search_cli(
 
     async with httpx.AsyncClient() as client:
         while True:
-            with console.status("[yellow]Searching for models...", spinner="dots"):
+            with console.status("[yellow]Searching for models...", spinner="dots") if not json_mode else _null_context():
                 try:
                     models = await make_api_request(
                         client,
@@ -183,11 +191,36 @@ async def search_cli(
                         },
                     )
                 except Exception as e:
-                    feedback_message(f"Error occurred: {str(e)}", "error")
+                    if json_mode:
+                        print(json.dumps({"status": "error", "message": str(e)}))
+                    else:
+                        feedback_message(f"Error occurred: {str(e)}", "error")
                     return
 
             if models.get("items") == []:
-                feedback_message("No models found. Please try again.", "warning")
+                if json_mode:
+                    print(json.dumps([]))
+                else:
+                    feedback_message("No models found. Please try again.", "warning")
+                return
+
+            if json_mode:
+                items = []
+                for model in models.get("items", []):
+                    versions = model.get("modelVersions", [])
+                    first_version = versions[0] if versions else {}
+                    items.append({
+                        "id": model["id"],
+                        "name": model["name"],
+                        "type": model["type"],
+                        "nsfw": model.get("nsfw", False),
+                        "tags": model.get("tags", []),
+                        "base_model": first_version.get("baseModel", ""),
+                        "size_kb": first_version.get("files", [{}])[0].get("sizeKB", 0) if first_version.get("files") else 0,
+                        "version_id": first_version.get("id"),
+                        "download_url": first_version.get("files", [{}])[0].get("downloadUrl", "") if first_version.get("files") else "",
+                    })
+                print(json.dumps({"items": items, "next_page": models.get("metadata", {}).get("nextPage")}))
                 return
 
             metadata = models.get("metadata", {})
@@ -264,6 +297,7 @@ def search_cli_sync(
     CIVITAI_MODELS=None,
     TYPES=None,
     download_function=None,
+    json_mode: bool = False,
 ) -> None:
     """
     Synchronous wrapper for the asynchronous search_cli function.
@@ -328,7 +362,7 @@ def search_cli_sync(
     asyncio.run(
         search_cli(
             query,
-            tag.lower(),
+            tag.lower() if tag else tag,
             types,
             limit,
             sort,
@@ -336,5 +370,6 @@ def search_cli_sync(
             CIVITAI_MODELS,
             TYPES,
             download_function,
+            json_mode=json_mode,
         )
     )

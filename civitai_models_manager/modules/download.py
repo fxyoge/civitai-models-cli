@@ -1,4 +1,6 @@
 import os
+import sys
+import json
 import httpx
 import shutil
 import tempfile
@@ -59,7 +61,6 @@ def check_for_upgrade(
 ) -> bool:
     current_version = os.path.basename(model_path)
     latest_version = versions[0].get("file")
-    print(latest_version, selected_version["file"])
     if latest_version != selected_version["file"] and latest_version != current_version:
         feedback_message(
             f"A newer version '{selected_version['file']}' is available.", "info"
@@ -76,6 +77,7 @@ def download_model(
     model_id: int,
     model_details: Dict[str, Any],
     select: bool = False,
+    json_mode: bool = False,
 ) -> Optional[str]:
     model_name = model_details.get("name", f"Model_{model_id}")
     model_type = model_details.get("type", "unknown")
@@ -83,7 +85,8 @@ def download_model(
     versions = model_details.get("versions", [])
 
     if not versions and not model_details.get("parent_id"):
-        feedback_message(f"No versions available for model {model_name}.", "warning")
+        if not json_mode:
+            feedback_message(f"No versions available for model {model_name}.", "warning")
         return None
 
     if not select and not model_details.get("parent_id"):
@@ -99,15 +102,17 @@ def download_model(
         }
     else:
         if model_details.get("parent_id"):
-            feedback_message(
-                f"Model {model_name} is a variant of {model_details['parent_name']} // Model ID: {model_details['parent_id']} \r Needs to be a parent model",
-                "warning",
-            )
+            if not json_mode:
+                feedback_message(
+                    f"Model {model_name} is a variant of {model_details['parent_name']} // Model ID: {model_details['parent_id']} \r Needs to be a parent model",
+                    "warning",
+                )
             return None
         selected_version = select_version(model_name, versions)
 
     if not selected_version:
-        feedback_message(f"A version is not available for model {model_name}.", "error")
+        if not json_mode:
+            feedback_message(f"A version is not available for model {model_name}.", "error")
         return None
 
     model_folder = get_model_folder(MODELS_DIR, model_type, TYPES)
@@ -119,21 +124,23 @@ def download_model(
 
     if os.path.exists(model_path):
         if not check_for_upgrade(versions, model_path, selected_version):
-            feedback_message(
-                f"Model {model_name} already exists at {model_path}. Skipping download.",
-                "warning",
-            )
-            return None
+            if not json_mode:
+                feedback_message(
+                    f"Model {model_name} already exists at {model_path}. Skipping download.",
+                    "warning",
+                )
+            return model_path
 
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     return download_file(
         f"{CIVITAI_DOWNLOAD}/{selected_version['id']}?token={CIVITAI_TOKEN}",
         model_path,
         model_name,
+        json_mode=json_mode,
     )
 
 
-def download_file(url: str, path: str, desc: str) -> Optional[str]:
+def download_file(url: str, path: str, desc: str, json_mode: bool = False) -> Optional[str]:
     temp_file = None
     try:
         with httpx.Client(timeout=httpx.Timeout(10.0, read=None)) as client:
@@ -147,37 +154,51 @@ def download_file(url: str, path: str, desc: str) -> Optional[str]:
                         temp_file = tempfile.NamedTemporaryFile(
                             delete=False, dir=os.path.dirname(path)
                         )
-                        with tqdm(
-                            total=total_size,
-                            unit="B",
-                            unit_scale=True,
-                            desc=f"Downloading {desc}",
-                            colour="yellow",
-                        ) as progress_bar:
+                        if json_mode:
                             buffer = bytearray()
                             for chunk in response.iter_bytes(chunk_size=131072):
                                 if chunk:
                                     buffer.extend(chunk)
-                                    progress_bar.update(len(chunk))
                                 if len(buffer) >= 1048576:  # 1MB
                                     temp_file.write(buffer)
                                     buffer.clear()
                             temp_file.write(buffer)
+                        else:
+                            with tqdm(
+                                total=total_size,
+                                unit="B",
+                                unit_scale=True,
+                                desc=f"Downloading {desc}",
+                                colour="yellow",
+                            ) as progress_bar:
+                                buffer = bytearray()
+                                for chunk in response.iter_bytes(chunk_size=131072):
+                                    if chunk:
+                                        buffer.extend(chunk)
+                                        progress_bar.update(len(chunk))
+                                    if len(buffer) >= 1048576:  # 1MB
+                                        temp_file.write(buffer)
+                                        buffer.clear()
+                                temp_file.write(buffer)
                         temp_file.close()
                         shutil.move(temp_file.name, path)
                         return path
                 except (httpx.RequestError, httpx.TimeoutException) as e:
                     if attempt < MAX_RETRIES - 1:
                         wait_time = 2**attempt
-                        feedback_message(
-                            f"Download failed. Retrying in {wait_time} seconds...",
-                            "warning",
-                        )
+                        if not json_mode:
+                            feedback_message(
+                                f"Download failed. Retrying in {wait_time} seconds...",
+                                "warning",
+                            )
                         time.sleep(wait_time)
                     else:
                         raise
     except Exception as e:
-        feedback_message(f"Failed to download the file: {e}", "error")
+        if not json_mode:
+            feedback_message(f"Failed to download the file: {e}", "error")
+        else:
+            raise
     finally:
         if temp_file and os.path.exists(temp_file.name):
             os.unlink(temp_file.name)
@@ -185,18 +206,18 @@ def download_file(url: str, path: str, desc: str) -> Optional[str]:
 
 
 def download_multiple_models(
-    identifiers: List[str], select: bool, **kwargs
-) -> List[Tuple[str, Optional[str]]]:
+    identifiers: List[str], select: bool, json_mode: bool = False, **kwargs
+) -> List[Tuple[str, Optional[str], Optional[str]]]:
     results = []
     for identifier in identifiers[:MAX_CONCURRENT_DOWNLOADS]:
-        result = download_single_model(identifier, select, **kwargs)
+        result = download_single_model(identifier, select, json_mode=json_mode, **kwargs)
         results.append(result)
     return results
 
 
 def download_single_model(
-    identifier: str, select: bool, **kwargs
-) -> Tuple[str, Optional[str]]:
+    identifier: str, select: bool, json_mode: bool = False, **kwargs
+) -> Tuple[str, Optional[str], Optional[str]]:
     try:
         model_id = int(identifier)
         model_details = get_model_details(
@@ -206,37 +227,76 @@ def download_single_model(
         )
         types = kwargs.get("TYPES")
         if model_details:
-            model_path = download_model(
-                kwargs.get("MODELS_DIR"),
-                kwargs.get("CIVITAI_DOWNLOAD"),
-                kwargs.get("CIVITAI_TOKEN"),
-                types,
-                model_id,
-                model_details,
-                select,
-            )
-            if model_path:
-                feedback_message(
-                    f"Model {identifier} downloaded successfully at: {model_path}",
-                    "info",
+            try:
+                model_path = download_model(
+                    kwargs.get("MODELS_DIR"),
+                    kwargs.get("CIVITAI_DOWNLOAD"),
+                    kwargs.get("CIVITAI_TOKEN"),
+                    types,
+                    model_id,
+                    model_details,
+                    select,
+                    json_mode=json_mode,
                 )
-                return identifier, model_path
+            except Exception as e:
+                if json_mode:
+                    return identifier, None, str(e)
+                feedback_message(f"Failed to download the model {identifier}: {e}", "error")
+                return identifier, None, str(e)
+            if model_path:
+                if not json_mode:
+                    feedback_message(
+                        f"Model {identifier} downloaded successfully at: {model_path}",
+                        "info",
+                    )
+                return identifier, model_path, None
             else:
-                if model_path is not None:
+                if model_path is not None and not json_mode:
                     feedback_message(
                         f"Failed to download the model {identifier}.", "error"
                     )
+                return identifier, None, f"Failed to download model {identifier}"
         else:
-            feedback_message(f"No model found with ID: {identifier}.", "error")
+            if not json_mode:
+                feedback_message(f"No model found with ID: {identifier}.", "error")
+            return identifier, None, f"No model found with ID: {identifier}"
     except ValueError:
-        feedback_message(
-            f"Invalid model ID: {identifier}. Please enter a valid number.", "error"
-        )
-    return identifier, None
+        if not json_mode:
+            feedback_message(
+                f"Invalid model ID: {identifier}. Please enter a valid number.", "error"
+            )
+        return identifier, None, f"Invalid model ID: {identifier}"
+    except Exception as e:
+        if not json_mode:
+            feedback_message(f"Error processing model {identifier}: {e}", "error")
+        return identifier, None, str(e)
 
 
 def download_model_cli(identifiers: List[str], select: bool = False, **kwargs) -> None:
+    json_mode = kwargs.pop("json_mode", False)
     if not identifiers:
-        feedback_message("No model identifiers provided.", "error")
+        if json_mode:
+            print(json.dumps({"status": "error", "message": "No model identifiers provided."}))
+        else:
+            feedback_message("No model identifiers provided.", "error")
         return
-    download_multiple_models(identifiers, select, **kwargs)
+    results = download_multiple_models(identifiers, select, json_mode=json_mode, **kwargs)
+    if json_mode:
+        output = []
+        for identifier, path, error in results:
+            if path:
+                output.append({
+                    "status": "ok",
+                    "model_id": identifier,
+                    "path": path,
+                    "size_bytes": os.path.getsize(path),
+                    "model_name": os.path.basename(path),
+                    "metadata_path": None,
+                })
+            else:
+                output.append({
+                    "status": "error",
+                    "model_id": identifier,
+                    "message": error or f"Failed to download model {identifier}",
+                })
+        print(json.dumps(output if len(output) > 1 else output[0] if output else {}))
