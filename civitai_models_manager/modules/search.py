@@ -209,6 +209,7 @@ async def search_cli(
                 for model in models.get("items", []):
                     versions = model.get("modelVersions", [])
                     first_version = versions[0] if versions else {}
+                    stats = model.get("stats", {})
                     items.append({
                         "id": model["id"],
                         "name": model["name"],
@@ -219,6 +220,8 @@ async def search_cli(
                         "size_kb": first_version.get("files", [{}])[0].get("sizeKB", 0) if first_version.get("files") else 0,
                         "version_id": first_version.get("id"),
                         "download_url": first_version.get("files", [{}])[0].get("downloadUrl", "") if first_version.get("files") else "",
+                        "download_count": stats.get("downloadCount", 0),
+                        "likes": stats.get("thumbsUpCount", 0),
                     })
                 print(json.dumps({"items": items, "next_page": models.get("metadata", {}).get("nextPage")}))
                 return
@@ -233,6 +236,8 @@ async def search_cli(
                     ("Model Type", "bright_yellow"),
                     ("Model Base", "yellow"),
                     ("Model NSFW", "white"),
+                    ("Downloads", "cyan"),
+                    ("Likes", "magenta"),
                     ("Model Tags", "bright_yellow"),
                 ],
             )
@@ -256,12 +261,17 @@ async def search_cli(
                     if model["nsfw"]
                     else Text("No", style="bright_red")
                 )
+                stats = model.get("stats", {})
+                downloads = Text(str(stats.get("downloadCount", 0)), style="cyan")
+                likes = Text(str(stats.get("thumbsUpCount", 0)), style="magenta")
                 search_table.add_row(
                     str(model["id"]),
                     f"{name} // [yellow]{size}[/yellow]",
                     model["type"],
                     base,
                     nsfw,
+                    downloads,
+                    likes,
                     tags,
                 )
 
